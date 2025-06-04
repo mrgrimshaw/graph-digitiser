@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 from streamlit_drawable_canvas import st_canvas
+st.write("Streamlit version:", st.__version__)
 
 st.set_page_config(layout="wide")
 st.title("📈 Graph Digitiser (No OpenCV)")
@@ -12,7 +13,8 @@ uploaded_file = st.file_uploader("Upload a graph image", type=["jpg", "jpeg", "p
 if not uploaded_file:
     st.stop()
 
-image = Image.open(uploaded_file).convert("RGB")
+image = Image.open(uploaded_file)
+img_rgb = np.array(image)  
 img_np = np.array(image)
 img_height, img_width = img_np.shape[:2]
 
