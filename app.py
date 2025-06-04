@@ -3,79 +3,85 @@
 
 # In[ ]:
 
-
 import streamlit as st
-import matplotlib.pyplot as plt
+from streamlit_drawable_canvas import st_canvas
+from PIL import Image
 import numpy as np
 import pandas as pd
-from PIL import Image
+import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
-st.title("🧭 Graph Photo Digitiser")
+st.title("📷 Graph Digitiser")
 
-uploaded_file = st.file_uploader("📷 Upload a graph photo", type=["jpg", "jpeg", "png"])
+# Upload image
+uploaded_file = st.file_uploader("Upload a photo of your graph", type=["png", "jpg", "jpeg"])
 Xmax = st.number_input("Grid X max", value=10)
 Ymax = st.number_input("Grid Y max", value=10)
 
+# Canvas drawing mode
+mode = st.radio("Canvas mode", ["Reference Points", "Label Points"])
+
+if "ref_points" not in st.session_state:
+    st.session_state.ref_points = []
+if "data_points" not in st.session_state:
+    st.session_state.data_points = []
+
 if uploaded_file:
     img = Image.open(uploaded_file)
-    img_array = np.array(img)
-    st.image(img_array, caption="Original Image", use_column_width=True)
+    width, height = img.size
 
-    st.markdown("### 🖱️ Click 3 points: bottom-left (0,0), top-left (0,Ymax), bottom-right (Xmax,0)")
+    st.write(f"Image size: {width} x {height}")
 
-    if "clicked" not in st.session_state:
-        st.session_state.clicked = []
-        st.session_state.labels = []
+    canvas_result = st_canvas(
+        fill_color="rgba(255, 0, 0, 0.3)",
+        stroke_width=3,
+        stroke_color="#FF0000",
+        background_image=img,
+        update_streamlit=True,
+        height=height,
+        width=width,
+        drawing_mode="point",
+        point_display_radius=5,
+        key="canvas"
+    )
 
-    fig, ax = plt.subplots()
-    ax.imshow(img_array)
+    if canvas_result.json_data is not None:
+        objects = canvas_result.json_data["objects"]
+        new_clicks = [(obj["left"], obj["top"]) for obj in objects]
 
-    if len(st.session_state.clicked) == 3:
-        bl = np.array(st.session_state.clicked[0])
-        tl = np.array(st.session_state.clicked[1])
-        br = np.array(st.session_state.clicked[2])
+        if mode == "Reference Points":
+            if len(new_clicks) != len(st.session_state.ref_points):
+                st.session_state.ref_points = new_clicks[:3]
+        elif mode == "Label Points":
+            if len(new_clicks) > len(st.session_state.ref_points) + len(st.session_state.data_points):
+                new_point = new_clicks[-1]
+                label = st.text_input("Label for new point", value=f"P{len(st.session_state.data_points)+1}")
+                if st.button("Add Label"):
+                    st.session_state.data_points.append((new_point[0], new_point[1], label))
 
+    # Once reference points are selected
+    if len(st.session_state.ref_points) == 3:
+        st.success("3 reference points selected.")
+        bl = np.array(st.session_state.ref_points[0])
+        tl = np.array(st.session_state.ref_points[1])
+        br = np.array(st.session_state.ref_points[2])
         x_vec = br - bl
         y_vec = tl - bl
 
-        def xy_to_pixel(x, y):
-            return bl + x * (x_vec / Xmax) + y * (y_vec / Ymax)
+        def pixel_to_xy(px, py):
+            rel = np.array([px, py]) - bl
+            x = np.dot(rel, x_vec) / np.dot(x_vec, x_vec) * Xmax
+            y = np.dot(rel, y_vec) / np.dot(y_vec, y_vec) * Ymax
+            return round(x, 2), round(y, 2)
 
-        grid_x = np.linspace(0, Xmax, Xmax + 1)
-        grid_y = np.linspace(0, Ymax, Ymax + 1)
+        if st.session_state.data_points:
+            xy_data = [pixel_to_xy(px, py) + (label,) for px, py, label in st.session_state.data_points]
+            df = pd.DataFrame(xy_data, columns=["X", "Y", "Label"])
+            st.dataframe(df)
 
-        for x in grid_x:
-            p1, p2 = xy_to_pixel(x, 0), xy_to_pixel(x, Ymax)
-            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 'w--', linewidth=0.5)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("📥 Download CSV", csv, "digitised_points.csv", "text/csv")
 
-        for y in grid_y:
-            p1, p2 = xy_to_pixel(0, y), xy_to_pixel(Xmax, y)
-            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 'w--', linewidth=0.5)
-
-        for pt, label in zip(st.session_state.labels, st.session_state.clicked[3:]):
-            ax.plot(pt[0], pt[1], 'ro')
-            ax.text(pt[0], pt[1], label, color='red', fontsize=8)
-
-    click = st.pyplot(fig)
-
-    st.markdown("Click on the image above (use Streamlit rerun workaround by refreshing)")
-
-    if st.button("🔁 Reset"):
-        st.session_state.clicked = []
-        st.session_state.labels = []
-
-    st.write("**Clicked Points:**", st.session_state.clicked)
-
-    if len(st.session_state.clicked) > 3:
-        df = pd.DataFrame(
-            [(x, y, l) for (x, y), l in zip(st.session_state.clicked[3:], st.session_state.labels)],
-            columns=["X", "Y", "Label"]
-        )
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download CSV", csv, "digitised_points.csv", "text/csv")
-
-    label = st.text_input("Label for next point")
-    if label and st.button("💾 Add Label"):
-        st.session_state.labels.append(label)
-
+    if st.button("🔁 Reset All"):
+        st.session_state.ref_points = []
+        st.session_state.data_points = []
