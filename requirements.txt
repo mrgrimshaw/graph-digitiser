@@ -4,3 +4,4 @@ pillow==9.5.0
 numpy
 pandas
 matplotlib
+opencv-python
