@@ -1,87 +1,76 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
-from PIL import Image
 import numpy as np
-import pandas as pd
+import cv2
 import matplotlib.pyplot as plt
+import pandas as pd
+from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(layout="wide")
-st.title("📷 Graph Digitiser")
+st.title("📈 Graph Digitiser")
 
 # Upload image
-uploaded_file = st.file_uploader("Upload a photo of your graph", type=["png", "jpg", "jpeg"])
-Xmax = st.number_input("Grid X max", value=10)
-Ymax = st.number_input("Grid Y max", value=10)
+uploaded_file = st.file_uploader("Upload a graph image", type=["jpg", "jpeg", "png"])
+if not uploaded_file:
+    st.stop()
 
-# Canvas drawing mode
-mode = st.radio("Canvas mode", ["Reference Points", "Label Points"])
+file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-if "ref_points" not in st.session_state:
-    st.session_state.ref_points = []
-if "data_points" not in st.session_state:
-    st.session_state.data_points = []
+# Show raw image
+st.image(img_rgb, caption="Uploaded Image", use_container_width=True)
 
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    width, height = img.size
+st.markdown("### Step 1: Select 3 Reference Points")
+st.markdown("Click: (1) Bottom-left (0,0), (2) Top-left (0,Ymax), (3) Bottom-right (Xmax,0)")
 
-    st.write(f"Image size: {width} x {height}")
+canvas_result = st_canvas(
+    fill_color="rgba(255, 0, 0, 0.3)",
+    stroke_width=3,
+    stroke_color="#FF0000",
+    background_image=Image.fromarray(img_rgb),
+    update_streamlit=True,
+    height=600,
+    drawing_mode="point",
+    key="calibration_canvas"
+)
 
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 0, 0, 0.3)",
-        stroke_width=3,
-        stroke_color="#FF0000",
-        background_image=img,
-        update_streamlit=True,
-        height=height,
-        width=width,
-        drawing_mode="point",
-        point_display_radius=5,
-        key="canvas"
-    )
+if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) >= 3:
+    points = canvas_result.json_data["objects"]
+    pts = [np.array([p["left"], p["top"]]) for p in points[:3]]
 
-    if canvas_result.json_data is not None:
-        objects = canvas_result.json_data["objects"]
-        new_clicks = [(obj["left"], obj["top"]) for obj in objects]
+    bl, tl, br = pts
+    tr = br + (tl - bl)
 
-        if mode == "Reference Points":
-            if len(new_clicks) != len(st.session_state.ref_points):
-                st.session_state.ref_points = new_clicks[:3]
-        elif mode == "Label Points":
-            if len(new_clicks) > len(st.session_state.ref_points) + len(st.session_state.data_points):
-                new_point = new_clicks[-1]
-                label = st.text_input("Label for new point", value=f"P{len(st.session_state.data_points)+1}")
-                if st.button("Add Label"):
-                    st.session_state.data_points.append((new_point[0], new_point[1], label))
+    Xmax = st.number_input("X axis max", value=10.0)
+    Ymax = st.number_input("Y axis max", value=10.0)
+    PIXELS_PER_UNIT = 100
+    dst = np.array([
+        [0, Ymax * PIXELS_PER_UNIT],
+        [0, 0],
+        [Xmax * PIXELS_PER_UNIT, Ymax * PIXELS_PER_UNIT],
+        [Xmax * PIXELS_PER_UNIT, 0]
+    ], dtype=np.float32)
 
-    # Once reference points are selected
-    if len(st.session_state.ref_points) == 3:
-        st.success("3 reference points selected.")
-        bl = np.array(st.session_state.ref_points[0])
-        tl = np.array(st.session_state.ref_points[1])
-        br = np.array(st.session_state.ref_points[2])
-        x_vec = br - bl
-        y_vec = tl - bl
+    src = np.array([bl, tl, br, tr], dtype=np.float32)
+    output_size = (int(Xmax * PIXELS_PER_UNIT), int(Ymax * PIXELS_PER_UNIT))
+    M = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(img_rgb, M, output_size)
 
-        def pixel_to_xy(px, py):
-            rel = np.array([px, py]) - bl
-            x = np.dot(rel, x_vec) / np.dot(x_vec, x_vec) * Xmax
-            y = np.dot(rel, y_vec) / np.dot(y_vec, y_vec) * Ymax
-            return round(x, 2), round(y, 2)
+    st.image(warped, caption="Warped Image", use_container_width=True)
 
-        if st.session_state.data_points:
-            xy_data = [pixel_to_xy(px, py) + (label,) for px, py, label in st.session_state.data_points]
-            df = pd.DataFrame(xy_data, columns=["X", "Y", "Label"])
-            st.dataframe(df)
+    # Overlay grid
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.imshow(warped, extent=[0, Xmax, 0, Ymax], aspect='auto', zorder=0)
+    ax.set_xlim(0, Xmax)
+    ax.set_ylim(0, Ymax)
+    ax.set_xlabel("X axis")
+    ax.set_ylabel("Y axis")
+    ax.set_title("XY Grid Over Aligned Image")
+    ax.grid(True, which='both', color='gray', linestyle='--', linewidth=0.5, zorder=1)
+    ax.set_xticks(np.arange(0, Xmax + 1, 1))
+    ax.set_yticks(np.arange(0, Ymax + 1, 1))
+    st.pyplot(fig)
 
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Download CSV", csv, "digitised_points.csv", "text/csv")
-
-    if st.button("🔁 Reset All"):
-        st.session_state.ref_points = []
-        st.session_state.data_points = []
+    st.success("Calibration complete. You can now implement point labelling next.")
+else:
+    st.info("Waiting for 3 calibration points...")
