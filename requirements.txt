@@ -3,3 +3,4 @@ pillow
 numpy
 matplotlib
 pandas
+streamlit-drawable-canvas
