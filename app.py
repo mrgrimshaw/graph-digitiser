@@ -1,25 +1,25 @@
 import streamlit as st
 import numpy as np
-import cv2
+from PIL import Image
 import matplotlib.pyplot as plt
-import pandas as pd
 from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(layout="wide")
-st.title("📈 Graph Digitiser")
+st.title("📈 Graph Digitiser (No OpenCV)")
 
 # Upload image
 uploaded_file = st.file_uploader("Upload a graph image", type=["jpg", "jpeg", "png"])
 if not uploaded_file:
     st.stop()
 
-file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+image = Image.open(uploaded_file).convert("RGB")
+img_np = np.array(image)
+img_height, img_width = img_np.shape[:2]
 
-# Show raw image
-st.image(img_rgb, caption="Uploaded Image", use_container_width=True)
+# Show image
+st.image(image, caption="Uploaded Image", use_container_width=True)
 
+# Select 3 reference points
 st.markdown("### Step 1: Select 3 Reference Points")
 st.markdown("Click: (1) Bottom-left (0,0), (2) Top-left (0,Ymax), (3) Bottom-right (Xmax,0)")
 
@@ -27,50 +27,41 @@ canvas_result = st_canvas(
     fill_color="rgba(255, 0, 0, 0.3)",
     stroke_width=3,
     stroke_color="#FF0000",
-    background_image=Image.fromarray(img_rgb),
+    background_image=image,
     update_streamlit=True,
     height=600,
     drawing_mode="point",
     key="calibration_canvas"
 )
 
-if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) >= 3:
+if canvas_result.json_data and len(canvas_result.json_data["objects"]) >= 3:
     points = canvas_result.json_data["objects"]
     pts = [np.array([p["left"], p["top"]]) for p in points[:3]]
 
     bl, tl, br = pts
-    tr = br + (tl - bl)
+    tr = br + (tl - bl)  # Approximate top-right
 
+    # Axis settings
     Xmax = st.number_input("X axis max", value=10.0)
     Ymax = st.number_input("Y axis max", value=10.0)
-    PIXELS_PER_UNIT = 100
-    dst = np.array([
-        [0, Ymax * PIXELS_PER_UNIT],
-        [0, 0],
-        [Xmax * PIXELS_PER_UNIT, Ymax * PIXELS_PER_UNIT],
-        [Xmax * PIXELS_PER_UNIT, 0]
-    ], dtype=np.float32)
 
-    src = np.array([bl, tl, br, tr], dtype=np.float32)
-    output_size = (int(Xmax * PIXELS_PER_UNIT), int(Ymax * PIXELS_PER_UNIT))
-    M = cv2.getPerspectiveTransform(src, dst)
-    warped = cv2.warpPerspective(img_rgb, M, output_size)
+    # Grid overlay
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.imshow(img_np)
+    ax.set_title("XY Grid Over Image")
 
-    st.image(warped, caption="Warped Image", use_container_width=True)
+    # Approximate coordinate axes using clicked points
+    x_axis = np.linspace(bl[0], br[0], int(Xmax) + 1)
+    y_axis = np.linspace(bl[1], tl[1], int(Ymax) + 1)
 
-    # Overlay grid
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.imshow(warped, extent=[0, Xmax, 0, Ymax], aspect='auto', zorder=0)
-    ax.set_xlim(0, Xmax)
-    ax.set_ylim(0, Ymax)
-    ax.set_xlabel("X axis")
-    ax.set_ylabel("Y axis")
-    ax.set_title("XY Grid Over Aligned Image")
-    ax.grid(True, which='both', color='gray', linestyle='--', linewidth=0.5, zorder=1)
-    ax.set_xticks(np.arange(0, Xmax + 1, 1))
-    ax.set_yticks(np.arange(0, Ymax + 1, 1))
+    for x in x_axis:
+        ax.axvline(x=x, color='gray', linestyle='--', linewidth=0.7)
+    for y in y_axis:
+        ax.axhline(y=y, color='gray', linestyle='--', linewidth=0.7)
+
+    ax.set_xlim(0, img_width)
+    ax.set_ylim(img_height, 0)
     st.pyplot(fig)
-
-    st.success("Calibration complete. You can now implement point labelling next.")
+    st.success("Grid overlay complete. You can now digitise points or label them.")
 else:
     st.info("Waiting for 3 calibration points...")
